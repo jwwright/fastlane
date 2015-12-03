@@ -1,0 +1,62 @@
+## EDIT THE FOLLOWING FIELDS
+
+name(
+  'en-US' => ''
+)
+
+description(
+  'en-US' => ''
+)
+
+keywords(
+  'en-US' => ''
+)
+
+
+## DO NOT EDIT BELOW ##
+
+if File.exists?('./AppIcon.png')
+  app_icon "./AppIcon.png"
+end
+
+
+## URLs
+support_url(
+  'en-US' => ''
+)
+
+privacy_url(
+  'en-US' => ''
+)
+
+marketing_url(
+  'en-US' => ''
+)
+
+
+## Categories
+primary_category "Lifestyle"
+
+secondary_category "Business"
+
+## Other
+price_tier 0
+
+automatic_release true
+
+copyright ""
+
+app_rating_config_path "./fastlane/ratings_config.json"
+
+if !Dir['./screenshots/*'].empty?
+  screenshots_path "./screenshots"
+end
+
+app_review_information({
+  first_name: "",
+  last_name: "",
+  phone_number: "",
+  email_address: "",
+  notes: ""
+})
+

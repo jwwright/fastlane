@@ -1,0 +1,191 @@
+require "parse-ruby-client"
+require "pp"
+
+opt_out_usage
+update_fastlane
+fastlane_version "1.37.0"
+default_platform :ios
+
+# Parse Data
+parse_app_id = ""
+parse_api_key = ""
+dummy_agent_group = ""
+
+# Bundle Data
+bundle_id = Dir.pwd.split("/")[-2] #Get the bundle name for the directory name
+version_id = Dir.pwd.split("/")[-3] #Get the version number from the parent directory
+
+# iTunes Connect Data
+username = ""
+
+##################
+##      iOS     ##
+##################
+
+platform :ios do
+  before_all do
+     ENV["SLACK_URL"] = "https://hooks.slack.com/services/..."
+     read_xcconfig
+  end
+
+  ##################  
+  ## PUBLIC LANES ##
+  ##################
+  
+  desc "Deploy a new app to the iTunes App Store"
+  lane :create do
+    file_check  
+    produce_app
+    get_provisioning_profile
+    sh "cd ./../..; ./Scripts/BuildNewApp.sh #{ bundle_id };cp ./App-#{bundle_id}/*.ipa ./#{bundle_id}/"
+    dummy_agent_group
+    screenshots 
+    release
+    push_cert
+  end
+
+  desc "Update an existing app in the app store"
+  lane :update do |options|
+    file_check 
+    produce_app
+    get_provisioning_profile
+    sh "cd ./../..; ./Scripts/BuildNewApp.sh #{ bundle_id };cp ./App-#{bundle_id}/*.ipa ./#{bundle_id}/"
+    screenshots
+    if !options[ :metadata].nil? && options[ :metadata ] == "true" 
+      release
+    else
+      release( metadata: false )
+    end
+    push_cert
+  end
+
+  ###################
+  ## PRIVATE LANES ##
+  ###################
+
+  # Produce the app on iTunes Connect
+  private_lane :produce_app do
+    produce(
+      username: username,
+      app_identifier: bundle_id,
+      app_name: ENV["APP_NAME"],
+      language: "English",
+      sku: bundle_id
+    )
+  end
+
+  # Changes the agent group to a "dummy" group for screenshot purposes
+  lane :dummy_agent_group do
+    ## INITIALIZE PARSE
+    Parse.init(
+      application_id: parse_app_id,
+      api_key: parse_api_key)
+
+
+    ## GET CURRENT AGENT GROUP
+    agent_query = Parse::Query.new( "AgentObject" )
+    agent_query.eq( "bundleID", bundle_id )
+    agent_query.include = "agentGroup"
+    agent_group = agent_query.get.first
+    begin
+      agent_group_id = agent_group["agentGroup"]["agent"].to_h["objectId"] #Current agent group id
+    rescue StandardError => err
+      print "No Agent Group previously assigned."
+    end
+
+    agent_group["agentGroup"] = Parse::Pointer.new({ "className" => "AgentGroupObject", "objectId" => dummy_agent_group })
+    result = agent_group.save
+  end
+
+  # Download or create the AdHoc Provisioning Profile
+  private_lane :get_provisioning_profile do
+    udid = sigh(
+      username: username,
+      app_identifier: bundle_id,
+      adhoc: true,
+      force: true,
+      cert_id: "7284SG32HW"
+    )
+  end
+
+  # Run the UI Screen Shooter script for screenshots
+  private_lane :screenshots do
+    sh "cd ./../../; ./ui-screen-shooter.sh #{ bundle_id } #{ ENV["APP_NAME"] }"
+  end
+
+  # Generate the push certificate
+  private_lane :push_cert do
+    pem(
+      username: username,
+      generate_p12: true,
+      app_identifier: bundle_id
+    )    
+  end
+
+  # Push the new build & metadata to iTunes connect
+  private_lane :release do |options|
+    skip_metadata = false
+
+    if !options[ :metadata].nil? && options[ :metadata ] == "false"
+      skip_metadata = true
+    end
+
+    deliver(
+      username: username,
+      app_identifier: bundle_id,
+      force: true,
+      submit_for_review: false,
+      skip_metadata: skip_metadata,
+      automatic_release: true
+   )
+  end
+  
+  # Read xcconfig file
+  private_lane :read_xcconfig do
+    begin
+      File.open( "../Base.xcconfig" ).each do |line|
+        line_split = line.split( " = " )  
+        if line.include? "PRODUCT_NAME"
+          puts line_split[1].delete( " \n" )
+          ENV["APP_NAME"] = line_split[1].delete( " \n" )
+        end
+      end
+    rescue StandardError => err
+      abort( "Error parsing Base.xcconfig. " )
+    end
+  end
+
+  # Check for required files
+  private_lane :file_check do
+    if !File.exist?( "../Base.xcconfig" )
+      puts "You must place the Base.xcconfig in the #{bundle_id} directory".red
+      exit
+    end
+   
+    if !File.exist?( "../AppIcon.png" )
+      puts "You must place the 1024x1024 app icon in the #{bundle_id} directory and name it AppIcon.png (./#{bundle_id}/AppIcon.png)".red
+      exit
+    end
+
+    if !File.exist?( "../AppIcon@2x.png" )
+      puts "You must place the 120x120 app icon in the #{bundle_id} directory and name it AppIcon@2x.png (./#{bundle_id}/AppIcon@2x.png)".red
+      exit
+    end  
+  end
+
+  after_all do |lane|
+    # This block is called, only if the executed lane was successful
+    
+    slack(
+      message: "Successfully submitted new #{lane} build (#{Actions.lane_context[SharedValues::BUILD_NUMBER]}) for " + ENV["APP_NAME"] + ". :rocket:",
+      success: true
+    )
+  end
+
+  error do |lane, exception|
+    slack(
+      message: exception.message,
+      success: false
+    )
+  end
+end
